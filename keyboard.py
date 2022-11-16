@@ -43,9 +43,10 @@ class Row_infos():
     s3=r"ZXCVBNM<>?"
     all_unshifted = [r0,r1,r2,r3]
     all_shifted = [s0,s1,s2,s3]
+    all_unshifted_combined = list(itertools.chain.from_iterable(all_unshifted))
+    all_unshifted_combined.append(' ')
+    all_shifted_combined = list(itertools.chain.from_iterable(all_shifted))
     
-    rowstarts = [60,90,105,135,239]
-    cell_size = 60
 
 
     @staticmethod
@@ -72,40 +73,47 @@ class Row_infos():
         Row_infos.key_info = key_info
         return key_info
 
+def interval_clip(vals,img,interval = 0.05):
+        vals = [v for v in vals if v > 0]
+        vals.sort()
+        mn = vals[int(interval * len(vals))]
+        mx = vals[int((1-interval) * len(vals))]
+        img = np.where((img<=mn) * (img != 0),mn,img)
+        img = np.where((img>=mx) * (img != 1),mx,img)
+        return img
+
+def count_clip(vals,img,num_values = 1):
+        vals = [v for v in vals if v > 0]
+        vals.sort()
+        mn = vals[num_values]
+        mx = vals[-num_values-1]
+        img = np.where((img<=mn) * (img != 0),mn,img)
+        img = np.where((img>=mx) * (img != 1),mx,img)
+        return img
 
 
-def extract_avg_latency (dict, chr_s,chr_us):
-    occ1,avg1 = dict[chr_s]
-    occ2,avg2 = dict[chr_us]
-    return 0 if occ1+occ2 == 0 else avg1 * (occ1/(occ1+occ2)) + avg2 * (occ2/(occ1+occ2))
-
-def extract_occurances (dict, chr_s,chr_us):
-    occ1,avg1 = dict[chr_s]
-    occ2,avg2 = dict[chr_us]
-    return occ1+occ2
-
-def get_heatmap(data_dict,extract_item=extract_avg_latency,normalise=9,normalise_f=None):
-    
-    #extract_item = functools.partial(data_f,)
+def get_heatmap(get_cell_value,clip_f=None):
+    rowstarts = [60,90,105,135,239]
+    cell_size = 60
     shape = (900,300)
     img = np.zeros(shape)
-    cell_size = Row_infos.cell_size
     empty_cell = np.zeros([cell_size,cell_size])
     vals = []
     for i,(row_s,row_us) in enumerate(zip(Row_infos.all_shifted,Row_infos.all_unshifted)):
-        x_offset = Row_infos.rowstarts[i]
+        x_offset = rowstarts[i]
         row_y_start = shape[1] - i*cell_size 
         x_empty_from = x_offset+len(row_s)*cell_size
         
-        row_img = [(extract_item(data_dict,chr_s,chr_us))/normalise for (chr_s,chr_us) in zip(row_s,row_us)]
+        row_img = [(get_cell_value(chr_s,chr_us)) for (chr_s,chr_us) in zip(row_s,row_us)]
         for val in row_img:
             vals.append(val)
         row_img = [empty_cell+val for val in row_img]
         row_img = np.concatenate(row_img,0)
         img[x_offset:x_empty_from,row_y_start-cell_size:row_y_start] = row_img
-    if normalise_f:
-        vals.sort()
-        img=normalise_f(vals,img)
+    img[240:600,0:60] = np.zeros([600-240,60]) + get_cell_value(None,' ')
+    #img[780:,240:] = np.zeros([120,60]) + get_cell_value(None,'bsp')
+    if clip_f:
+        img=clip_f(vals,img)
     return img
 
 def apply_colormap(img,colormap):
@@ -113,12 +121,13 @@ def apply_colormap(img,colormap):
     aaa = np.vectorize(cmap)(colormap)
     bbb = np.where(img>200,img,colormap)
     return bbb
-def show_heatmap(data_dict,extraction_f,alpha=0.8,normalise_f=None):
+
+def show_heatmap(extraction_f,colormap='Oranges',alpha=0.8,clip_f=interval_clip):
         #fig,ax = start_plot()
         #ax.invert_yaxis()
         # divider = make_axes_locatable(ax)
         # cax = divider.append_axes('right', size='5%', pad=0.05)
-        img = 1-plt.imread('qwerty.png')[::-1,...]
+        img = plt.imread('qwerty.png')[::-1,...]
        
 
         # image with a scalebar
@@ -134,10 +143,16 @@ def show_heatmap(data_dict,extraction_f,alpha=0.8,normalise_f=None):
         plt.xticks([])
         plt.yticks([])
         ax.axis('off')
-        heatmap = get_heatmap(data_dict,extract_item=extraction_f,normalise_f=normalise_f)
-        b = cm.get_cmap('binary')(img) 
-        h= cm.get_cmap('Oranges')(heatmap.T/np.max(heatmap),alpha=1)
-        im = np.where(b<0.5,b,h)
+        heatmap = get_heatmap(extraction_f,clip_f=clip_f)
+        b = cm.get_cmap('binary_r')(img) 
+        h= cm.get_cmap(colormap)(heatmap.T/np.max(heatmap),alpha=1)
+        #
+        mask_letters = np.sum(((b<0.5)),axis=-1,keepdims=True) >= 3
+        mask_keep_white = np.sum(((h>0.9)),axis=-1,keepdims=True) > 3
+        mask = np.logical_or(mask_letters, mask_keep_white)
+        mask = np.broadcast_to(mask,b.shape)
+        #mask = (b<0.5)
+        im = np.where(mask,b,h)
         ax.imshow(im,interpolation='antialiased')
         # im1 = ax.imshow(img, cmap=plt.cm.binary,interpolation='antialiased')
         # im2 = ax.imshow(heatmap.T, cmap='Oranges',alpha=0.8,interpolation='antialiased')

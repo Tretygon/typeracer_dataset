@@ -3,13 +3,13 @@ from typing import Callable
 from enum import Enum
 T = typing.TypeVar('T')
 class Parser:
-    def __init__(self):
+    def __init__(self,text):
         self.offset:int = 0
-        self.state = None
-    def __call__(self,str:str,pred:Callable[[str,int,int],bool],cont:Callable[[str,int,int],T])->T:
-            for i in range(len(str)):
-                if pred(str,self.offset,self.offset+i):
-                    ret = cont(str,self.offset,self.offset+i)
+        self.text:str = text
+    def __call__(self,cont:Callable[[str,int,int],T])->T:
+            for i in range(len(self.text)):
+                res = cont(self.text,self.offset,self.offset+i)
+                if res != None:
                     self.offset = self.offset + i + 1 
-                    return ret
+                    return res
         

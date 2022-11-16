@@ -28,7 +28,7 @@ def get_page(req):
     page  = requests.get(address)
     if page.status_code >= 400:
         print('request error ',req)
-        time.sleep(15)
+        time.sleep(25)
         return get_page(req)
     soup = BeautifulSoup(page.text, 'html.parser')
     
@@ -37,49 +37,47 @@ def get_page(req):
 
 
 scraped = defaultdict(set) #remember what was already scraped to prevent pointless requests
-data_header=['player','match','wpm','acc','pos', 'letters', 'frequencies','log2']
+data_header=['player','match','wpm','acc','pos', 'letters', 'latencies','mistakes','letters_all','latencies_all','durations','operations']
 data =  pd.DataFrame(columns=data_header)
 
-def zerozero(): #work around, so the dd can be pickled
-    return (0,0)
-
-key_freq = defaultdict(zerozero)
 
 def save_mined():
-    global data,scraped,key_freq,data_header
-    data.to_csv('data.csv')
+    global data,scraped,data_header
+    data.to_pickle('dataset.p')
     pickle.dump( scraped, open( "scraped.p", "wb" ))
-    pickle.dump( key_freq, open( "keys.p", "wb" ))
 def load_mined():
     global data,scraped,key_freq,data_header
-    data = pd.read_csv('data.csv')
+    data = pd.read_pickle('dataset.p')
     scraped = pickle.load(open( "scraped.p", "rb" ))
-    key_freq = pickle.load(open( "keys.p", "rb" ))
-    return data,key_freq
-
-#load_mined()
+    return data
 
 
 
-def fetch_matches():
+
+
+def fetch_matches(scrape_players = 9999,matches_per_player=999):
     global data,scraped,key_freq,data_header
     latest_races = get_page('latest')
     players = latest_races.find_all(class_="userProfileTextLink")
     duplicates = 0
+    successful = 0
     count_all = 0
+    player_mined_i = 0
+    write_per = 10
     player_accessed = set()  #load each player only once in this function call; saves bunch of requests
+    
     for p in players:
-        print(f'dupes: {duplicates}, all: {count_all}, rate:{duplicates/count_all if count_all!=0 else 0}')
         href = p['href']
         p_name = href.split('?user=')[-1]
         
-        
-        count_all +=1
         if p_name in player_accessed: 
-            duplicates+=1
             continue
         else: player_accessed.add(p_name)
 
+        if count_all > scrape_players:
+            break
+        print(f'err_r {(count_all  - successful)/count_all if count_all!=0 else 0}, all: {count_all}, suc_rate:{successful/count_all if count_all!=0 else 0}')
+        
         player_profile = get_page(href)
         if player_profile is None:continue
 
@@ -89,7 +87,9 @@ def fetch_matches():
             kb_span.find_next_sibling('span').string != 'Qwerty':
             continue
 
-        for a in player_profile.find_all('a',title="Click to see the replay"):
+        match_i = 0
+        for a in player_profile.find_all('a',title="Click to see the replay")[:matches_per_player]:
+            count_all +=1
             match_href = a['href']
             player,match = match_href.split('|')[-2:]
             player = player.split(':')[-1]
@@ -97,6 +97,8 @@ def fetch_matches():
             if match in scraped[player]:
                 continue
             else:
+                match_i +=1
+                if match_i > matches_per_player: break
                 scraped[player].add(match)
             replay_page = get_page(match_href)
             # with open('rep_page','w') as f:
@@ -135,18 +137,23 @@ def fetch_matches():
             if len(typing_log)>2:
                 continue
             else :
-                parsed = parse_log.parse_typing_log1(typing_log[0])
-                if parsed:
-                    letters,latencies = parsed
-                    
-                    for lett,lat in zip(letters,latencies):
-                        (occ,avg_lat) = key_freq[lett]
-                        key_freq[lett] = (occ+1,avg_lat + (lat-avg_lat)/(occ+1))
-                    #letters = np.array(letters)
-                    #latencies = np.array(latencies)
-                    row_dataset = pd.DataFrame([[player,match,wpm,accuracy,position,letters,latencies,typing_log[1]]],columns=data_header)
-                    data = pd.concat([data,row_dataset],ignore_index=True,axis=0)
-        save_mined()     
+                try:
+                    parsed = parse_log.parse_typing_log1(typing_log[0])
+                    if parsed:
+                        letters,latencies = list(map(np.array,parsed))
+                        parsed2 = parse_log.parse_typing_log2(typing_log[1],letters)
+                        
+                        if parsed2:
+                            letters2,latencies2,durations,operations,mistakes = list(map(np.array,parsed2))
+                            
+                            row_dataset = pd.DataFrame([[player,match,wpm,accuracy,position,letters,latencies,mistakes,letters2,latencies2,durations,operations]],columns=data_header)
+                            data = pd.concat([data,row_dataset],ignore_index=True,axis=0)
+                            successful+=1
+                except Exception:
+                    pass
+        player_mined_i +=1
+        if player_mined_i % write_per ==0:
+            save_mined()     
     return data
 
 
@@ -154,6 +161,7 @@ def fetch_matches():
     #print(latencies)
 
 if __name__ == '__main__':
+    load_mined()
     while True:
         fetch_matches()
 

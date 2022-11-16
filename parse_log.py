@@ -1,31 +1,36 @@
 from parsing import Parser
-from enum import Enum
+from enum import IntEnum
+
+
 def parse_typing_log1(log:str):
-    parser = Parser()
+    parser = Parser(log)
     
 
-    char_eq = lambda c1:(lambda str,i,j: c1==str[j])
-    is_comma = char_eq(',')
+    pred_and_ret = lambda pred,ret: lambda s,i,j:ret(s,i,j) if pred(s,i,j) else None
     make_slice = lambda s,i,j:s[i:j]
 
-    parser(log,is_comma,lambda s,i,j:None)
-    lang = parser(log,is_comma,make_slice)
+    chr_eq = lambda ch: (lambda s,i,j:ch==s[j])
+    not_num = lambda str,i,j: not str[j].isdigit() or (j== len(str)-1) 
+    until_num = lambda str,i,j: str[j].isdigit() or (j == len(str)-1)
+
+    slice_on_comma = pred_and_ret(chr_eq(','),make_slice)
+    single = pred_and_ret(lambda s,i,j: True,lambda s,i,j: s[j])
+
+    parser(slice_on_comma)
+    lang = parser(slice_on_comma)
     if lang!= 'en': 
         return None
     
-    some_num = parser(log,is_comma,make_slice)
-    letter = log[parser.offset]
-    parser.offset+=1
+    init_latency = int(parser(slice_on_comma))
+    letter = parser(single)
     
 
     letters = [letter]
-    latencies = []
-    not_num = lambda str,i,j: not str[j].isdigit() or (j== len(str)-1)
-    until_num = lambda str,i,j: str[j].isdigit() or (j == len(str)-1)
+    latencies = [init_latency]
     
     while parser.offset<len(log)-1:
-        l = lambda s,i,j:(s[i:j],s[j])
-        latency,letter = parser(log,not_num,l)
+        next_letter_next_freq = pred_and_ret(not_num,lambda s,i,j:(s[i:j],s[j]))
+        latency,letter = parser(next_letter_next_freq)
         if letter == '`' or letter == '~': 
             return None
         if letter == '\\':
@@ -58,88 +63,131 @@ def parse_typing_log1(log:str):
     
     return letters,latencies
 
-class press_type(Enum):
+class press_type(IntEnum):
     Add_correct = 0
-    Add_incorrect = 1
+    Add_mistake = 1
     Remove_correct = 2
-    Remove_incorrect = 3
+    Remove_mistake = 3
 
 
 def parse_typing_log2(log:str,letters1):
-    parser = Parser()
-    make_slice = lambda s,i,j:s[i:j]
-    letter1_position = 0
-    letter2_position = 0
-    was_last_number = False
+    parser = Parser(log)
+    letters1_i = 0
     letters = []
     latencies = []
     operations = []
+    durations = []
+    all_multi_comps = []
+    op_chars = []
     mistakes = []
-    keypresses = 0
-    not_num = lambda str,i,j: not str[j].isdigit() or (j== len(str)-1)
-    until_num = lambda str,i,j: str[j].isdigit() or (j == len(str)-1)
-    is_separating_comma = lambda str,i,j:(j == len(str)-1) or (str[j] == ',' and str[j+1] != ',')
-    
+    all_keypresses = 0
+    mistakes_to_delete = 0
+    has_been_mistake = False
+
+    def parse_composite(s,i,j):
+        if s[j] == ',' and ((s[j-1] != '+' and s[j-1] != '-')or((s[j-2] == '+' or (s[j-2] == '-')) and ((s[j-1] == '+' or (s[j-1] == '-'))))):
+            rets = []
+            slic = s[i:j]
+            if '\"' in slic:
+                print()
+            slc_s = 0
+            slc_e = 0
+            while slc_e<len(slic)-1:
+                while slc_e < len(slic) and slic[slc_s:slc_e+1].isdecimal():
+                    slc_e+=1
+                dur = slic[slc_s:slc_e]
+                op = slic[slc_e]
+                if op != '+' and op != '-':
+                    print('unk op', op,slic)
+                    return [(42,op,'q')]
+                slc_e+=1
+                chr = slic[slc_e]
+                if chr == '\\':
+                    slc_e+=1
+                    chr = slic[slc_e]
+                slc_e+=1
+                rets.append((dur,op,chr))
+                if len(chr)>1:
+                    print()
+                slc_s = slc_e
+            if len(rets) > 1:
+                print()
+            return rets
+            # if len(slic.split('+'))>2:
+            #     slic.find('+')
+            #     print()
+            # if len(slic.split('+-'))>2:
+            #     print()
+            # if slic.find('+')>0 and slic.find('-')>0:
+            #     print()
+            # op_i = slic.find('+')
+            # if op_i == -1 or op_i == len(slic)-1: # not found or the '+' is at the end as the letter 
+            #     op_i = slic.find('-')
+            # dur,op,chr = int(slic[:op_i]),slic[op_i],slic[-1]
+            # if len(chr)>1:
+            #     print()
+            #return (dur,op,chr)
+            
+    def parse_num(s,i,j):
+        if s[j] == ',':
+            return int(s[i:j])
+
     while parser.offset<len(log)-1:
+        #if mistakes_to_delete > 0: #seems like typeracer can sometimes have reversed letters(even tho they are correct order in log1)
+            #return None
+        word_start_i = parser(parse_num)
+        letters1_i = word_start_i
+        keystrokes = parser(parse_num)
+        all_keypresses += keystrokes
+        for letter_i in range(keystrokes):
+            latency = parser(parse_num)
+            latencies.append(latency)
+            comps =  parser(parse_composite)
+            first_comp = True
+            if len(comps)>1 and all([comp[1]=='-' for comp in comps]):  #typeracer replay bug: ctrl+bsp has inverse deletion order
+                comps.reverse()
+            if len(comps)>1:
+                all_multi_comps.append(comps)
+            for comp in comps:
+                if not first_comp:
+                    latencies.append(0)
+                first_comp = False
 
-        latency = parser(log,not_num,make_slice)
-        if log[parser.offset-1] ==',':
-            if was_last_number:
-                was_last_number = False  
-                next_word_start_index = latencies.pop(len(latencies)-1)
-                try:
-                    keystrokes_to_type = int(latency)
-                except Exception :
-                    print('keystrokes_to_type parsing err ', latency )
-                    print(letter)
-                    print(log)
-                    print(letters)
-                    print(latencies)
+                duration,op,chr =  comp
+                if op != '+' and op != '-':
                     return None
-            else:
-                was_last_number = True
-                try:
-                    latencies.append(int(latency))
-                except Exception :
-                    print('latency parsing err ', latency )
-                    print(letter)
-                    print(log)
-                    print(letters)
-                    print(latencies)
-                    return None
-        else:
-            was_last_number = False
-            keypresses +=1
-            op = log[parser.offset-1]
-            letter = parser(log,is_separating_comma,make_slice)
-            if letter[0]== '\\':
-                if letter[1] == "b":
-                    letter = letter[2]
-                else:
-                    letter = letter[1]
-            letters.append(letter)
-            if op == '+':
-                if letter1_position == letter2_position:
-                    if letters1[letter1_position] == letter:
-                        letter1_position+=1
-                        letter2_position+=1
+
+                if letters1_i == len(letters1):
+                    return None #extra letter after text ?!?
+                l_i = letters1_i
+                if op == '+':
+                    if chr == letters1[letters1_i] and mistakes_to_delete == 0:
+                        letters1_i +=1
+                        operations.append(press_type.Add_correct)
+                        mistakes.append(has_been_mistake)
+                        has_been_mistake = False
                     else:
-                        mistakes.append(letter)
-                        letter2_position+=1
-        try:
-            durations.append(int(latency))
-        except Exception :
-            print('latency parsing err ', latency )
-            print(letter)
-            print(log)
-            print(letters)
-            print(latencies)
-            return None
-        if op and op != '+' and op != '-':
-            print('unk op', op)
-       
+                        operations.append(press_type.Add_mistake)
+                        mistakes_to_delete += 1
+                        has_been_mistake = True
+                else:
+                    if mistakes_to_delete > 0:
+                        operations.append(press_type.Remove_mistake)
+                        mistakes_to_delete-=1
+                    else:
+                        operations.append(press_type.Remove_correct)
+                        letters1_i -=1
+                        mistakes.pop(len(mistakes)-1)
+                op_chars.append((op+chr,operations[-1],chr,letters1[l_i],chr == letters1[l_i]))
 
-        
+                
+                durations.append(duration)
+                letters.append(chr)
+            
 
+    if len(operations) != len(latencies) or len(operations) != len(letters):
+        print('dif op and kp len', len(operations),all_keypresses)
+    if mistakes_to_delete > 0: #throw away this result as not to poison the data
+        return None
         
-    return letters,latencies,durations,mistakes
+    return letters,latencies,durations,operations,mistakes
